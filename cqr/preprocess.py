@@ -1,13 +1,21 @@
 
 import json
 import copy
-
+import logging
+import argparse
 from cqr.utils import NUM_FOLD
 
-with open('data/evaluation_topics_v1.0.json', 'r') as fin:
+parser = argparse.ArgumentParser()
+parser.add_argument("--input_dir", default="./data",
+                    type=str, help="input directory to read CasT data from")
+parser.add_argument("--num_fold", default=NUM_FOLD,
+                    type=int, help="Number of folds for cross validation")
+args = parser.parse_args()
+
+with open(f'{args.input_dir}/evaluation_topics_v1.0.json', 'r') as fin:
     raw_data = json.load(fin)
 
-with open('data/evaluation_topics_annotated_resolved_v1.0.tsv', 'r') as fin:
+with open(f'{args.input_dir}/evaluation_topics_annotated_resolved_v1.0.tsv', 'r') as fin:
     annonated_lines = fin.readlines()
 
 all_annonated = {}
@@ -42,15 +50,15 @@ for group in raw_data:
             topic_number_dict[topic_number] = len(topic_number_dict)
         data.append(record)
 
-with open('data/eval_topics.jsonl', 'w') as fout:
+with open(f'{args.input_dir}/eval_topics.jsonl', 'w') as fout:
     for item in data:
         json_str = json.dumps(item, ensure_ascii=False)
         fout.write(json_str + '\n')
 
 # Split eval data into K-fold
-topic_per_fold = len(topic_number_dict) // NUM_FOLD
-for i in range(NUM_FOLD):
-    with open('data/eval_topics.jsonl.%d' % i, 'w') as fout:
+topic_per_fold = len(topic_number_dict) // args.num_fold
+for i in range(args.num_fold):
+    with open(f'{args.input_dir}/eval_topics.jsonl.%d' % i, 'w') as fout:
         for item in data:
             idx = topic_number_dict[item['topic_number']]
             if idx // topic_per_fold == i:

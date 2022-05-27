@@ -2,6 +2,8 @@
 import argparse
 import logging
 import json
+import collections
+import collections.abc
 import os
 import torch
 
@@ -169,13 +171,15 @@ def main():
                         help="Overwrite the content of the output directory")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed for initialization")
+    parser.add_argument('--n_gpu', type=int, default=2,
+                        help="number of GPUs to use")
     args = parser.parse_args()
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and not args.overwrite_output_dir:
         raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))
 
     device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-    args.n_gpu = torch.cuda.device_count()
+    args.n_gpu = args.n_gpu
     args.device = device
 
     # Setup logging
