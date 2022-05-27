@@ -49,6 +49,7 @@ def main():
 
     model_path = args.model_path
     if args.cross_validate:
+        logger.info("***Using CV mode!***")
         for i in range(NUM_FOLD):
             args.model_path = "%s-%d" % (model_path, i)
             logger.info("Predict using Model {}".format(args.model_path))
@@ -74,6 +75,7 @@ def main():
                         output_line = json.dumps({"topic_number": topic_number, "query_number": i, "input": predictions, "target": target_sent})
                         fout.write(output_line + "\n")
     else:
+        logger.info("***Using single model model***")
         logger.info("Predict using Model {}".format(args.model_path))
         inference_model = InferenceModel(args)
         output_file = args.output_file
