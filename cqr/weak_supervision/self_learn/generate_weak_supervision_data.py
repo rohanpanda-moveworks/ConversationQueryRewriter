@@ -33,10 +33,12 @@ def main():
                         help="random seed for initialization")
     parser.add_argument('--cross_validate', action='store_true',
                         help="flag for switching to CV mode")
+    parser.add_argument('--n_gpu', default=-1, type=int,
+                        help="Number of GPUs to use")
     args = parser.parse_args()
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-    args.n_gpu = torch.cuda.device_count()
+    args.n_gpu = torch.cuda.device_count() if args.n_gpu <0 else args.n_gpu
     set_seed(args)
 
     logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
