@@ -31,6 +31,8 @@ def main():
                         help="Avoid using CUDA when available")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed for initialization")
+    parser.add_argument('--cross_validate', action='store_true',
+                        help="flag for switching to CV mode")
     args = parser.parse_args()
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -46,11 +48,35 @@ def main():
         args.length = MAX_LENGTH  # avoid infinite loop
 
     model_path = args.model_path
-    for i in range(NUM_FOLD):
-        args.model_path = "%s-%d" % (model_path, i)
+    if args.cross_validate:
+        for i in range(NUM_FOLD):
+            args.model_path = "%s-%d" % (model_path, i)
+            logger.info("Predict using Model {}".format(args.model_path))
+            inference_model = InferenceModel(args)
+            output_file = "%s.%d" % (args.output_file, i)
+            with open(args.input_file, 'r') as fin, open(output_file, 'w') as fout:
+                all_lines = fin.readlines()
+                for line in tqdm(all_lines, desc="Predict"):
+                    splitted = (line[:-1] if line[-1] == '\n' else line).split('\t')
+                    queries = splitted[1:]
+                    topic_number = splitted[0]
+                    i = 1
+                    predictions = [queries[0]]
+                    for query in queries[1:]:
+                        i += 1
+                        input_sents = queries[:i]
+                        prediction = inference_model.predict(input_sents).strip()
+                        predictions.append(prediction)
+                        target_sent = query
+                        if prediction == target_sent.strip():
+                            continue
+                        
+                        output_line = json.dumps({"topic_number": topic_number, "query_number": i, "input": predictions, "target": target_sent})
+                        fout.write(output_line + "\n")
+    else:
         logger.info("Predict using Model {}".format(args.model_path))
         inference_model = InferenceModel(args)
-        output_file = "%s.%d" % (args.output_file, i)
+        output_file = args.output_file
         with open(args.input_file, 'r') as fin, open(output_file, 'w') as fout:
             all_lines = fin.readlines()
             for line in tqdm(all_lines, desc="Predict"):
