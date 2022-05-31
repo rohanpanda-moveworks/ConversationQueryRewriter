@@ -14,6 +14,10 @@ def main():
                         required=True, 
                         help="outpt json file path for inverted CANARD data"
                         )
+    parser.add_argument('--simplify',
+                        action='store_true',
+                        help="whether canard needs to be used for simplifier or  org training"
+                        )
     args = parser.parse_args()
 
     canard_data = []
@@ -31,8 +35,13 @@ def main():
         
         pt['topic_number'] = topic_num
         pt['query_number'] = inst['Question_no'] + 1 
-        pt['input'] = inst["History"] + [inst["Rewrite"]]
-        pt['target'] = inst["Question"]
+        if args.simplify:
+            tgt, hist = inst["Question"], inst["Rewrite"]
+        else:
+            tgt, hist = inst["Rewrite"], inst["Question"]
+
+        pt['input'] = inst["History"] + [hist]
+        pt['target'] = tgt
         invert_canard_data.append(pt)
 
     with open(args.output_path, 'w') as f:
