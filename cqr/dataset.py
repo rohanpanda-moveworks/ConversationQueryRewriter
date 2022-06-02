@@ -26,8 +26,9 @@ class ConvSearchExample:
 
 
 class QueryRewriteDataset(Dataset):
-    def __init__(self, filenames, tokenizer, args):
+    def __init__(self, filenames, tokenizer, args, debugging=False):
         self.examples = []
+        self.debugging = debugging
         for filename in filenames:
             with open(filename, encoding="utf-8") as f:
                 for line in f:
@@ -74,6 +75,9 @@ class QueryRewriteDataset(Dataset):
                     assert len(this_example_labels) == args.block_size
                     self.examples.append(ConvSearchExample(topic_number, query_number,\
                          this_example, this_example_labels, begin_pos, needs_rewrite))
+
+        if self.debugging:
+            self.examples = np.random.choice(self.examples, 100, replace=False)
 
     def __len__(self):
         return len(self.examples)

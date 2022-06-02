@@ -95,12 +95,14 @@ def eval(args, val_dataset, model, inf_model, tokenizer , logger):
         inputs = inputs.to(args.device)  # batch_size * block_size
         labels = labels.to(args.device)
         mc_labels = torch.tensor(batch[5]).to(args.device)
-        mc_token_ids = torch.tensor([0 for _ in inputs]).to(args.device)
+        mc_token_ids = (inputs == tokenizer.cls_token_id).nonzero(as_tuple=False)
+        mc_token_ids = mc_token_ids[:,1]
+        mc_token_ids = mc_token_ids.to(args.device)
         model.eval()
         outputs = model(input_ids=inputs, lm_labels=labels, mc_labels=mc_labels, mc_token_ids=mc_token_ids)
         mc_loss = outputs[1]  # model outputs are always tuple in transformers (see doc)
         lm_loss = get_lm_loss(outputs[2],labels,mc_labels)
-        loss = 10*mc_loss + lm_loss
+        loss = mc_loss + lm_loss
         epoch_tot += len(labels)
         _,pred = outputs[3].data.topk(1,dim=1)
         pred = pred.flatten()
@@ -134,7 +136,7 @@ def eval(args, val_dataset, model, inf_model, tokenizer , logger):
             # print(val_pt,train_pt)
             val_pred = inf_model.predict(val_pt['input'])
             train_pred = inf_model.predict(train_pt['input'])
-            logger.info("DEBUG*********")
+            logger.info("************DEBUG*********")
             logger.info(f"Train Target: {train_pt['target']} \n Train pred: {train_pred}")
             logger.info(f"Val Target: {val_pt['target']} \n Val pred: {val_pred}")
     return tr_loss / global_step, epoch_pos/epoch_tot
@@ -168,6 +170,7 @@ def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger,
     logger.info("***** Running training *****")
     logger.info("  Num examples = %d", len(train_dataset))
     logger.info("  Num Epochs = %d", args.num_train_epochs)
+    logger.info(f" Num GPU = {args.n_gpu}")
     logger.info("  Instantaneous batch size per GPU = %d", args.per_gpu_train_batch_size)
     logger.info("  Total train batch size (w. parallel & accumulation) = %d",
                    args.train_batch_size * args.gradient_accumulation_steps)
@@ -177,7 +180,7 @@ def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger,
     global_step = 0
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
-    # eval(args, val_dataset, model, inf_model, tokenizer, logger)
+    eval(args, val_dataset, model, inf_model, tokenizer, logger)
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproducibility (even between python 2 and 3)
     for ep in train_iterator:
@@ -205,7 +208,7 @@ def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger,
             outputs = model(input_ids=inputs, lm_labels=labels, mc_labels=mc_labels, mc_token_ids=mc_token_ids)
             mc_loss = outputs[1]  # model outputs are always tuple in transformers (see doc)
             lm_loss = get_lm_loss(outputs[2],labels,mc_labels)
-            loss = 10*mc_loss + lm_loss
+            loss = mc_loss + lm_loss
             epoch_tot += len(labels)
             _,pred = outputs[3].data.topk(1,dim=1)
             pred = pred.flatten()
@@ -223,7 +226,6 @@ def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger,
             #     loss = loss / args.gradient_accumulation_steps
 
             loss.backward()
-
             tr_loss += loss.item()
             epoch_loss += loss.item()
             del loss
@@ -326,8 +328,11 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.0,
                         help="temperature of 0 implies greedy sampling")
     parser.add_argument("--top_p", type=float, default=0.9)
+    parser.add_argument("--toy_data", action="store_true",
+                        help="use only 100 datapoints for debugging")
     args = parser.parse_args()
-    args.n_gpu = torch.cuda.device_count() if args.n_gpu < 1 else args.n_gpu 
+    args.n_gpu = torch.cuda.device_count() if args.n_gpu < 1 else args.n_gpu
+
     if args.overwrite_output_dir:
         if os.path.exists(args.output_dir):
             shutil.rmtree(args.output_dir)
@@ -335,7 +340,6 @@ def main():
         raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))
 
     device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-    args.n_gpu = args.n_gpu
     args.device = device
 
     # Setup logging
@@ -368,7 +372,7 @@ def main():
 
         # Training
         logger.info("Training/evaluation parameters %s", args)
-        train_dataset = QueryRewriteDataset([args.train_file], tokenizer, args)
+        train_dataset = QueryRewriteDataset([args.train_file], tokenizer, args, debugging=args.toy_data)
         val_dataset = QueryRewriteDataset([args.valid_file], tokenizer, args)
         global_step, tr_loss = train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
