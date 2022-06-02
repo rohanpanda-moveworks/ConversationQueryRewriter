@@ -1,7 +1,8 @@
 
 import torch
 from torch.nn import functional as F
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2DoubleHeadsModel
+from cqr.utils import NUM_FOLD, set_seed, special_tokens_dict
 
 
 def to_list(tensor):
@@ -35,23 +36,37 @@ def top_p_filtering(logits, top_p=0.0, filter_value=-float('Inf')):
 class InferenceModel:
 
     def __init__(self, args):
+
         model_class, tokenizer_class = GPT2LMHeadModel, GPT2Tokenizer
-        self.tokenizer = tokenizer_class.from_pretrained(args.model_path)
-        self.model = model_class.from_pretrained(args.model_path)
+        if args.mtl:
+            model_class = GPT2DoubleHeadsModel
+        try:
+            self.tokenizer = tokenizer_class.from_pretrained(args.model_path)
+            self.model = model_class.from_pretrained(args.model_path)
+        except:
+            self.tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
+            self.model = model_class.from_pretrained(args.model_name_or_path)
         self.model.to(args.device)
         self.model.eval()
 
         self.device = args.device
         self.length = args.length
         if self.model.config.max_position_embeddings < args.length:
-            self.length = model.config.max_position_embeddings # No generation bigger than model size 
+            self.length = self.model.config.max_position_embeddings # No generation bigger than model size 
         self.temperature = args.temperature
         self.top_p = args.top_p
 
         self.special_tokens = ['<SEP>', '<PAD>', '<BOS>', '<EOS>']
+        if args.mtl:
+            self.special_tokens.append('<CLS>')
+        self.tokenizer.add_special_tokens(special_tokens_dict)
+        self.mtl = args.mtl
 
     def get_input_seq(self, input_sents):
+
         inputs = []
+        if self.mtl:
+            inputs = [self.tokenizer.cls_token_id]
         for sent in input_sents:
             inputs.extend(self.tokenizer.convert_tokens_to_ids(self.tokenizer.tokenize(sent)))
             inputs.append(self.tokenizer.sep_token_id)
@@ -67,14 +82,17 @@ class InferenceModel:
 
     def predict(self, input_sents):
         input_ids = self.get_input_seq(input_sents)
+        # print(input_sents, input_ids)
         input_length = len(input_ids)
         input_ids = torch.tensor(input_ids, dtype=torch.long, device=self.device).unsqueeze(0)
-        
+        # print(input_ids)
         with torch.no_grad():
-            for _ in range(self.length):
+            for step in range(self.length):
                 inputs = {'input_ids': input_ids}
     
                 outputs = self.model(**inputs)
+                # print(outputs[0].shape)
+                # exit(0)
                 next_token_logits = outputs[0][:, -1, :] / (self.temperature if self.temperature > 0 else 1.)
     
                 filtered_logits = top_p_filtering(next_token_logits, top_p=self.top_p)
@@ -84,11 +102,16 @@ class InferenceModel:
                     next_token = torch.multinomial(F.softmax(filtered_logits, dim=-1), num_samples=1)
                 new_token = to_list(next_token)
                 if self.tokenizer.decode(new_token[0]).strip() == "<EOS>":
+                    # _, mc_pred = outputs[1].topk(1,dim=1)
+                    # print(mc_pred)
+                    # print(f"step:{step} break called")
                     break
                 input_ids = torch.cat((input_ids, next_token), dim=1)
 
         pred_ids = to_list(input_ids[0, input_length:])
+        # print(f"PRED_IDS: {pred_ids}")
         pred_text = self.tokenizer.decode(pred_ids, clean_up_tokenization_spaces=True)
+        # print(f"PRED_TEXT:{pred_text}")
         pred_text = self.remove_special_tokens(pred_text)
         
         return pred_text 

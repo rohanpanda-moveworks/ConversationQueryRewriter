@@ -33,6 +33,8 @@ def main():
                         help="Avoid using CUDA when available")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed for initialization")
+    parser.add_argument('--mtl', action='store_true',
+                        help="Activate MTL setting")
     args = parser.parse_args()
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")

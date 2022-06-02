@@ -38,7 +38,7 @@ class QueryRewriteDataset(Dataset):
                     query_number = record['query_number']
                     if args.mtl:
                         needs_rewrite = record['needs_rewrite']
-                    this_example = [tokenizer.cls_token_id]
+                    this_example = []
                     this_example_labels = []
 
                     for sent in input_sents:
@@ -46,6 +46,7 @@ class QueryRewriteDataset(Dataset):
                                             tokenizer.tokenize(sent)))
                         this_example.append(tokenizer.sep_token_id)
                     this_example.pop()
+                    this_example.append(tokenizer.cls_token_id)
                     this_example.append(tokenizer.bos_token_id)
 
                     begin_pos = len(this_example)
@@ -60,12 +61,16 @@ class QueryRewriteDataset(Dataset):
 
                     if len(this_example) > args.block_size:
                         this_example = this_example[:args.block_size]
+                        if args.mtl and tokenizer.cls_token_id not in this_example:
+                            this_example.pop()
+                            this_example.append(tokenizer.cls_token_id)
                         this_example_labels = this_example_labels[:args.block_size]
+
                     else:
                         pad_num = args.block_size - len(this_example)
                         this_example.extend([tokenizer.pad_token_id] * pad_num)
                         this_example_labels.extend([-1] * pad_num)
-                    assert len(this_example) == args.block_size
+                    assert len(this_example) == args.block_size, print(f"{len(this_example)} {args.block_size}")
                     assert len(this_example_labels) == args.block_size
                     self.examples.append(ConvSearchExample(topic_number, query_number,\
                          this_example, this_example_labels, begin_pos, needs_rewrite))
