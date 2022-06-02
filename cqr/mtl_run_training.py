@@ -327,6 +327,7 @@ def main():
                         help="temperature of 0 implies greedy sampling")
     parser.add_argument("--top_p", type=float, default=0.9)
     args = parser.parse_args()
+    args.n_gpu = torch.cuda.device_count() if args.n_gpu < 1 else args.n_gpu 
     if args.overwrite_output_dir:
         if os.path.exists(args.output_dir):
             shutil.rmtree(args.output_dir)
