@@ -1,5 +1,6 @@
 
 import argparse
+from faulthandler import disable
 import logging
 import json
 import shutil
@@ -47,8 +48,13 @@ def get_lm_loss(preds, target, needs_rewrite):
     loss = F.cross_entropy(preds, target, reduction='none', ignore_index=-1)
     
     loss = (loss.view(-1)*needs_rewrite).sum()
-
-    return loss/needs_rewrite.sum().item()
+    if torch.isnan(loss):
+        print("called from loss calc")
+        print(preds, target, needs_rewrite)
+        exit(0)
+    nr = needs_rewrite.sum().item()
+    nr = nr if nr > 0 else 1
+    return loss/nr
 
 def eval(args, val_dataset, model, inf_model, tokenizer , logger):
     args.val_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
@@ -63,32 +69,12 @@ def eval(args, val_dataset, model, inf_model, tokenizer , logger):
     else:
         t_total = len(val_dataloader) 
 
-    # Prepare optimizer and schedule (linear warmup and decay)
-    # no_decay = ['bias', 'LayerNorm.weight']
-    # optimizer_grouped_parameters = [
-    #     {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
-    #     {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-    #     ]
-    # optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=t_total)
-
-    # multi-gpu training (should be after apex fp16 initialization)
-
-    # Train!
-    # logger.info("***** Running training *****")
-    # logger.info("  Num examples = %d", len(train_dataset))
-    # logger.info("  Num Epochs = %d", args.num_train_epochs)
-    # logger.info("  Instantaneous batch size per GPU = %d", args.per_gpu_train_batch_size)
-    # logger.info("  Total train batch size (w. parallel & accumulation) = %d",
-    #                args.train_batch_size * args.gradient_accumulation_steps)
-    # logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
-    # logger.info("  Total optimization steps = %d", t_total)
-
     global_step = 0
     tr_loss, logging_loss = 0.0, 0.0
     # val_iterator = trange(int(num_val_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproducibility (even between python 2 and 3)
-    epoch_iterator = tqdm(val_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
+    epoch_iterator = tqdm(val_dataloader, desc="Iteration", \
+        disable=args.local_rank not in [-1, 0])
     epoch_pos, epoch_tot = 0., 0.
     for step, batch in enumerate(epoch_iterator):
         inputs, labels = (batch[2], batch[3])  # get ids and labels
@@ -120,7 +106,7 @@ def eval(args, val_dataset, model, inf_model, tokenizer , logger):
 
         tr_loss += loss.item()
         global_step += 1
-        del loss
+        
         torch.cuda.empty_cache()
         frac = ((step+1)/len(epoch_iterator))
         epoch_iterator.set_postfix(Loss=tr_loss/global_step, Acc=epoch_pos/epoch_tot*100)
@@ -128,6 +114,7 @@ def eval(args, val_dataset, model, inf_model, tokenizer , logger):
         if args.max_steps > 0 and global_step > args.max_steps:
             epoch_iterator.close()
             break
+        del loss
     
     if args.debug:
         with open(args.valid_file, 'r') as valid, open(args.train_file, 'r') as train:
@@ -180,11 +167,13 @@ def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger,
     global_step = 0
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
-    eval(args, val_dataset, model, inf_model, tokenizer, logger)
-    train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
+    # eval(args, val_dataset, model, inf_model, tokenizer, logger)
+    train_iterator = trange(int(args.num_train_epochs), desc="Epoch",\
+        disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproducibility (even between python 2 and 3)
     for ep in train_iterator:
-        epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
+        epoch_iterator = tqdm(train_dataloader, desc="Iteration", \
+            disable=args.local_rank not in [-1, 0])
         epoch_loss = 0.
         epoch_pos, epoch_tot = 0., 0.
         for step, batch in enumerate(epoch_iterator):
@@ -208,7 +197,14 @@ def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger,
             outputs = model(input_ids=inputs, lm_labels=labels, mc_labels=mc_labels, mc_token_ids=mc_token_ids)
             mc_loss = outputs[1]  # model outputs are always tuple in transformers (see doc)
             lm_loss = get_lm_loss(outputs[2],labels,mc_labels)
-            loss = mc_loss + lm_loss
+            if torch.isnan(lm_loss):
+                print(f"called during train, cls is {tokenizer.cls_token_id}")
+                print(f"Input: {inputs}\n \
+                        label: {labels}\n \
+                        mc_loss: {mc_loss}\n \
+                        lm_loss: {lm_loss}")
+                exit(0)
+            loss = mc_loss + 10*lm_loss
             epoch_tot += len(labels)
             _,pred = outputs[3].data.topk(1,dim=1)
             pred = pred.flatten()
@@ -228,6 +224,8 @@ def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger,
             loss.backward()
             tr_loss += loss.item()
             epoch_loss += loss.item()
+            # print(epoch_loss/(step+1))
+            # exit(0)
             del loss
             torch.cuda.empty_cache()
             frac = ((step+1)/len(epoch_iterator))
@@ -363,8 +361,8 @@ def main():
         model = model_class.from_pretrained(args.model_name_or_path)
         model.resize_token_embeddings(len(tokenizer))  # resize
         model.to(args.device)
-
-        inf_model = InferenceModel(args)
+        model_config = {'model': model, 'tokenizer': tokenizer}
+        inf_model = InferenceModel(args, model_config)
 	
         if args.block_size <= 0:
             args.block_size = tokenizer.max_len_single_sentence
@@ -373,7 +371,7 @@ def main():
         # Training
         logger.info("Training/evaluation parameters %s", args)
         train_dataset = QueryRewriteDataset([args.train_file], tokenizer, args, debugging=args.toy_data)
-        val_dataset = QueryRewriteDataset([args.valid_file], tokenizer, args)
+        val_dataset = QueryRewriteDataset([args.valid_file], tokenizer, args, debugging=args.toy_data)
         global_step, tr_loss = train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 

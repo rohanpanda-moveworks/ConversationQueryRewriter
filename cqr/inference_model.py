@@ -1,4 +1,5 @@
 
+# from types import NoneType
 import torch
 from torch.nn import functional as F
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPT2DoubleHeadsModel
@@ -35,17 +36,22 @@ def top_p_filtering(logits, top_p=0.0, filter_value=-float('Inf')):
 
 class InferenceModel:
 
-    def __init__(self, args):
+    def __init__(self, args, model_config=None):
 
         model_class, tokenizer_class = GPT2LMHeadModel, GPT2Tokenizer
+        
         if args.mtl:
             model_class = GPT2DoubleHeadsModel
-        try:
-            self.tokenizer = tokenizer_class.from_pretrained(args.model_path)
-            self.model = model_class.from_pretrained(args.model_path)
-        except:
-            self.tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
-            self.model = model_class.from_pretrained(args.model_name_or_path)
+        if model_config is not None:
+            self.model = model_config['model']
+            self.tokenizer = model_config['tokenizer']
+        else:
+            try:
+                self.tokenizer = tokenizer_class.from_pretrained(args.model_path)
+                self.model = model_class.from_pretrained(args.model_path)
+            except:
+                self.tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
+                self.model = model_class.from_pretrained(args.model_name_or_path)
         self.model.to(args.device)
         self.model.eval()
 
@@ -61,6 +67,7 @@ class InferenceModel:
             self.special_tokens.append('<CLS>')
         self.tokenizer.add_special_tokens(special_tokens_dict)
         self.mtl = args.mtl
+        self.debugging = args.toy_data
 
     def get_input_seq(self, input_sents):
 
@@ -109,8 +116,10 @@ class InferenceModel:
                 input_ids = torch.cat((input_ids, next_token), dim=1)
 
         pred_ids = to_list(input_ids[0, input_length:])
-        # print(f"PRED_IDS: {pred_ids}")
+            # print(f"PRED_IDS: {pred_ids}")
         pred_text = self.tokenizer.decode(pred_ids, clean_up_tokenization_spaces=True)
+        if self.debugging:
+            print(f"decode op: {pred_text}")
         # print(f"PRED_TEXT:{pred_text}")
         pred_text = self.remove_special_tokens(pred_text)
         

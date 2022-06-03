@@ -1,6 +1,6 @@
 
 import json
-
+import numpy as np
 from torch.utils.data import Dataset
 
 class ConvSearchExample:
@@ -29,6 +29,8 @@ class QueryRewriteDataset(Dataset):
     def __init__(self, filenames, tokenizer, args, debugging=False):
         self.examples = []
         self.debugging = debugging
+        if self.debugging:
+            print(f"in dataset class, cls is {tokenizer.cls_token_id}")
         for filename in filenames:
             with open(filename, encoding="utf-8") as f:
                 for line in f:
