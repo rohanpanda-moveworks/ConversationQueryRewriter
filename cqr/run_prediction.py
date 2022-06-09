@@ -4,7 +4,7 @@ import json
 import logging
 import random
 import torch
-
+import os
 from tqdm import tqdm, trange
 
 from cqr.inference_model import InferenceModel
@@ -35,6 +35,7 @@ def main():
                         help="random seed for initialization")
     parser.add_argument('--mtl', action='store_true',
                         help="Activate MTL setting")
+    parser.add_argument('--toy_data',action='store_true')
     args = parser.parse_args()
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -51,6 +52,8 @@ def main():
 
     if not args.cross_validate:
         inference_model = InferenceModel(args)
+        if not os.path.exists(args.output_file):
+            os.makedirs(args.output_file[:args.output_file.rfind('/')], exist_ok=True)
         with open(args.input_file , 'r') as fin, open(args.output_file, 'w') as fout:
             for line in tqdm(fin, desc="Predict"):
                 record = json.loads(line)

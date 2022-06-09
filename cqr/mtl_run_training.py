@@ -11,12 +11,15 @@ import os
 from cqr.inference_model import InferenceModel
 import torch
 import torch.nn.functional as F
+from torch.nn import  CrossEntropyLoss
+
+
 from datetime import datetime
 
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from tqdm import tqdm, trange
 from transformers import  GPT2Config,GPT2DoubleHeadsModel,\
-     GPT2Tokenizer, AdamW, get_linear_schedule_with_warmup
+     GPT2Tokenizer, AdamW, get_linear_schedule_with_warmup, GPT2LMHeadModel
 
 from cqr.dataset import QueryRewriteDataset
 from cqr.utils import NUM_FOLD, set_seed, special_tokens_dict
@@ -40,21 +43,15 @@ def collate_fn(batch_dataset: list):
 
 def get_lm_loss(preds, target, needs_rewrite):
     # print(preds.shape, target.shape)
-    needs_rewrite = needs_rewrite.repeat(1,preds.shape[1]).view(-1)
-    preds = preds.view(-1,preds.shape[-1])
-    target = target.view(-1)
-    
-    # print(target)
-    loss = F.cross_entropy(preds, target, reduction='none', ignore_index=-1)
-    
-    loss = (loss.view(-1)*needs_rewrite).sum()
-    if torch.isnan(loss):
-        print("called from loss calc")
-        print(preds, target, needs_rewrite)
-        exit(0)
-    nr = needs_rewrite.sum().item()
-    nr = nr if nr > 0 else 1
-    return loss/nr
+    idx_need = (needs_rewrite == 1).nonzero(as_tuple=False)
+    target, preds = target[idx_need].squeeze(), preds[idx_need].squeeze()
+
+    shift_logits = preds[..., :-1, :].contiguous()
+    shift_labels = target[..., 1:].contiguous()
+    loss_fct = CrossEntropyLoss(ignore_index=-1)
+    lm_loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+    return lm_loss
+
 
 def eval(args, val_dataset, model, inf_model, tokenizer , logger):
     args.val_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
@@ -126,7 +123,7 @@ def eval(args, val_dataset, model, inf_model, tokenizer , logger):
             logger.info("************DEBUG*********")
             logger.info(f"Train Target: {train_pt['target']} \n Train pred: {train_pred}")
             logger.info(f"Val Target: {val_pt['target']} \n Val pred: {val_pred}")
-    return tr_loss / global_step, epoch_pos/epoch_tot
+    return tr_loss / global_step, epoch_pos/epoch_tot*100
 
 
 def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger, cross_validate_id=-1):
@@ -203,8 +200,10 @@ def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger,
                         label: {labels}\n \
                         mc_loss: {mc_loss}\n \
                         lm_loss: {lm_loss}")
-                exit(0)
-            loss = mc_loss + 10*lm_loss
+                # exit(0)
+                lm_loss = outputs[0]
+            # lm_loss = outputs[0]
+            loss = mc_loss + 50*lm_loss
             epoch_tot += len(labels)
             _,pred = outputs[3].data.topk(1,dim=1)
             pred = pred.flatten()
@@ -247,6 +246,7 @@ def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger,
                         os.makedirs(output_dir)
                     model_to_save = model.module if hasattr(model, 'module') else model
                     model_to_save.save_pretrained(output_dir)
+                    tokenizer.save_pretrained(output_dir)
                     torch.save(args, os.path.join(output_dir, 'training_args.bin'))
                     logger.info("Saving model checkpoint to %s", output_dir)
 
@@ -259,7 +259,7 @@ def train(args, train_dataset, val_dataset, model, inf_model, tokenizer, logger,
         logger.info(f"==========Epoch {ep}/{int(args.num_train_epochs)}==========")
         logger.info(f"Train Loss: {epoch_loss} | Train Acc: {epoch_acc}")
         val_loss, val_acc = eval(args, val_dataset, model, inf_model, tokenizer, logger)
-        logger.info(f"Val Loss: {val_loss} | Train Acc: {val_acc}")
+        logger.info(f"Val Loss: {val_loss} | Val Acc: {val_acc}")
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
@@ -351,8 +351,10 @@ def main():
 
     # Set seed
     set_seed(args)
-
-    config_class, model_class, tokenizer_class = GPT2Config, GPT2DoubleHeadsModel, GPT2Tokenizer
+    if args.mtl:
+        config_class, model_class, tokenizer_class = GPT2Config, GPT2DoubleHeadsModel, GPT2Tokenizer
+    else:
+        config_class, model_class, tokenizer_class = GPT2Config, GPT2LMHeadModel, GPT2Tokenizer
 
     if not args.cross_validate:
         config = config_class.from_pretrained(args.model_name_or_path)
@@ -360,6 +362,8 @@ def main():
         tokenizer.add_special_tokens(special_tokens_dict)
         model = model_class.from_pretrained(args.model_name_or_path)
         model.resize_token_embeddings(len(tokenizer))  # resize
+        if args.toy_data:
+            print(f"tokenizer stuff: <BOS> = {tokenizer.bos_token_id}, <SEP> = {tokenizer.sep_token_id}, <CLS> = {tokenizer.cls_token_id}")
         model.to(args.device)
         model_config = {'model': model, 'tokenizer': tokenizer}
         inf_model = InferenceModel(args, model_config)

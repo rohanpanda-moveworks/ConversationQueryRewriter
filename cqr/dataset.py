@@ -49,8 +49,9 @@ class QueryRewriteDataset(Dataset):
                                             tokenizer.tokenize(sent)))
                         this_example.append(tokenizer.sep_token_id)
                     this_example.pop()
-                    this_example.append(tokenizer.cls_token_id)
-                    this_example.append(tokenizer.bos_token_id)
+                    if args.mtl:
+                        this_example.append(tokenizer.cls_token_id)
+                    this_example.append(tokenizer.bos_token_id) #teacher forcing starts from here
 
                     begin_pos = len(this_example)
                     this_example_labels.extend([-1] * begin_pos)
